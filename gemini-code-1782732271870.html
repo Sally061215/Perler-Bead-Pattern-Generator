@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拼豆图纸自动生成器</title>
+    <style>
+        :root {
+            --primary-color: #ff6b81;
+            --bg-color: #f7f1e3;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            margin: 0;
+            padding: 20px;
+            color: #2c3e50;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: var(--primary-color);
+            margin-bottom: 30px;
+        }
+        .workspace {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 30px;
+        }
+        @media (max-width: 768px) {
+            .workspace { grid-template-columns: 1fr; }
+        }
+        /* 控制面板 */
+        .controls {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+        .control-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        input[type="file"], select, input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        button {
+            width: 100%;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #ff4757;
+        }
+        /* 预览区域 */
+        .preview-area {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 400px;
+            background: #fff;
+            overflow: auto;
+        }
+        /* 拼豆网格画布 */
+        canvas {
+            max-width: 100%;
+            height: auto;
+            image-rendering: pixelated;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .print-info {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #6c757d;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🔮 拼豆图纸自动生成器</h1>
+    
+    <div class="workspace">
+        <div class="controls">
+            <div class="control-group">
+                <label for="imageLoader">1. 上传图片</label>
+                <input type="file" id="imageLoader" accept="image/*">
+            </div>
+
+            <div class="control-group">
+                <label for="boardSize">2. 模板尺寸 (大格数)</label>
+                <select id="boardSize">
+                    <option value="29">29 x 29 (标准小模板)</option>
+                    <option value="50" selected>50 x 50 (中型模板)</option>
+                    <option value="80">80 x 80 (大型拼盘)</option>
+                    <option value="110">110 x 110 (超大巨作)</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="beadSize">3. 实体拼豆直径比例</label>
+                <select id="beadSize">
+                    <option value="2.6">2.6mm (小豆)</option>
+                    <option value="5.0" selected>5.0mm (中豆)</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label for="paperSize">4. 打印纸张比例 (参考)</label>
+                <select id="paperSize">
+                    <option value="A4">A4 纸张</option>
+                    <option value="A5">A5 纸张</option>
+                </select>
+            </div>
+
+            <button id="downloadBtn">下载/打印图纸</button>
+        </div>
+
+        <div class="preview-area">
+            <canvas id="beadCanvas"></canvas>
+            <div class="print-info" id="printInfo">请先上传一张图片来生成图纸。</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const imageLoader = document.getElementById('imageLoader');
+    const boardSizeSelect = document.getElementById('boardSize');
+    const beadSizeSelect = document.getElementById('beadSize');
+    const paperSizeSelect = document.getElementById('paperSize');
+    const canvas = document.getElementById('beadCanvas');
+    const ctx = canvas.getContext('2d');
+    const printInfo = document.getElementById('printInfo');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    let originalImage = null;
+
+    // 监听图片上传
+    imageLoader.addEventListener('change', handleImage, false);
+    // 监听参数修改自动重绘
+    boardSizeSelect.addEventListener('change', generatePattern);
+    beadSizeSelect.addEventListener('change', generatePattern);
+    paperSizeSelect.addEventListener('change', generatePattern);
+
+    function handleImage(e) {
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            originalImage = new Image();
+            originalImage.onload = function() {
+                generatePattern();
+            }
+            originalImage.src = event.target.result;
+        }
+        reader.readAsDataURL(e.target.files[0]);
+    }
+
+    function generatePattern() {
+        if (!originalImage) return;
+
+        const targetGrid = parseInt(boardSizeSelect.value); // 目标像素格子数（宽或高）
+        
+        // 计算保持比例的网格大小
+        let gridW, gridH;
+        if (originalImage.width > originalImage.height) {
+            gridW = targetGrid;
+            gridH = Math.round((originalImage.height / originalImage.width) * targetGrid);
+        } else {
+            gridH = targetGrid;
+            gridW = Math.round((originalImage.width / originalImage.height) * targetGrid);
+        }
+
+        // 创建离屏临时 canvas 用于将图片像素化
+        const tmpCanvas = document.createElement('canvas');
+        const tmpCtx = tmpCanvas.getContext('2d');
+        tmpCanvas.width = gridW;
+        tmpCanvas.height = gridH;
+        
+        // 关键：将大图压缩画到微型画布上，实现“像素化”
+        tmpCtx.drawImage(originalImage, 0, 0, gridW, gridH);
+        const imgData = tmpCtx.getImageData(0, 0, gridW, gridH).data;
+
+        // 渲染放大后的图纸画布
+        const cellSize = 12; // 网页上每个拼豆显示的像素大小
+        canvas.width = gridW * cellSize;
+        canvas.height = gridH * cellSize;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 循环画出每一个“拼豆”
+        for (let y = 0; y < gridH; y++) {
+            for (let x = 0; x < gridW; x++) {
+                const i = (y * gridW + x) * 4;
+                const r = imgData[i];
+                const g = imgData[i+1];
+                const b = imgData[i+2];
+                const a = imgData[i+3];
+
+                if (a < 128) {
+                    // 透明背景画灰色网格
+                    ctx.strokeStyle = '#e0e0e0';
+                    ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+                    continue;
+                }
+
+                // 画拼豆圆形（模拟真豆效果）
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+                ctx.beginPath();
+                ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, cellSize/2 - 1, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 画豆豆中间的孔
+                ctx.fillStyle = '#ffffff';
+                ctx.beginPath();
+                ctx.arc(x * cellSize + cellSize/2, y * cellSize + cellSize/2, cellSize/6, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 画格子边框
+                ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+                ctx.strokeRect(x * cellSize, y * cellSize, cellSize, cellSize);
+            }
+        }
+
+        // 更新纸张及实体大小统计信息
+        updateFileInfo(gridW, gridH);
+    }
+
+    function updateFileInfo(w, h) {
+        const beadSize = parseFloat(beadSizeSelect.value);
+        const paper = paperSizeSelect.value;
+        
+        // 计算作品的实际物理尺寸 (厘米)
+        const realWidth = ((w * beadSize) / 10).toFixed(1);
+        const realHeight = ((h * beadSize) / 10).toFixed(1);
+        
+        printInfo.innerHTML = `
+            <strong>图纸规格：</strong>共 ${w} x ${h} 颗豆（总计 ${w*h} 颗）<br>
+            <strong>成品实体尺寸：</strong>约 ${realWidth} x ${realHeight} 厘米 (使用 ${beadSize}mm 豆)<br>
+            <strong>打印建议：</strong>当前比例适合以 <strong>${paper}</strong> 纸张进行输出。
+        `;
+    }
+
+    // 下载功能
+    downloadBtn.addEventListener('click', function() {
+        if (!originalImage) {
+            alert('请先上传图片再下载！');
+            return;
+        }
+        const link = document.createElement('a');
+        link.download = 'pixel-beads-pattern.png';
+        link.href = canvas.toDataURL();
+        link.click();
+    });
+</script>
+
+</body>
+</html>
